@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+from requests import request
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
@@ -8,6 +9,7 @@ from utils.prioritized_replay_buffer import NaivePrioritizedReplayMemory, Transi
 from utils.history_buffer import HistoryBuffer
 from utils.general import export_plot
 
+from torch.utils.tensorboard import SummaryWriter
 
 class DRRTrainer(object):
     def __init__(self,
@@ -28,13 +30,14 @@ class DRRTrainer(object):
         self.reward_function = reward_function
 
         # Initialize device
-        self.device_id = torch.cuda.current_device()
-        print("CUDA Device ID: ", self.device_id)
-        print(torch.cuda.get_device_name(self.device_id))
-        print("CUDA Memory Allocated: ", torch.cuda.memory_allocated(self.device_id))
-        print("CUDA Memory Reserved: ", torch.cuda.memory_reserved(self.device_id) / 1000000000, "GB")
-        torch.cuda.empty_cache()
-        self.device = torch.device('cuda:{}'.format(self.device_id) if cuda else "cpu")
+        # self.device_id = torch.cuda.current_device()
+        # print("CUDA Device ID: ", self.device_id)
+        # print(torch.cuda.get_device_name(self.device_id))
+        # print("CUDA Memory Allocated: ", torch.cuda.memory_allocated(self.device_id))
+        # print("CUDA Memory Reserved: ", torch.cuda.memory_reserved(self.device_id) / 1000000000, "GB")
+        # torch.cuda.empty_cache()
+        # self.device = torch.device('cuda:{}'.format(self.device_id) if cuda else "cpu")
+        self.device=torch.device('cpu')
         print("Current PyTorch Device: ", self.device)
 
         # Import Data
@@ -44,10 +47,10 @@ class DRRTrainer(object):
         self.items = items
         self.user_embeddings = user_embeddings.to(self.device)
         self.item_embeddings = item_embeddings
-        self.u = 2
-        self.i = 4
-        self.r = 1
-        self.ti = 0
+        self.u = 0
+        self.i = 1
+        self.r = 2
+        self.ti = 3
 
         # Dimensions
         self.item_features = self.item_embeddings.shape[1]
@@ -120,12 +123,24 @@ class DRRTrainer(object):
                                                  amsgrad=False)
         print("Optimizers initialized")
 
+        # tensorboard logger
+        self.writer = SummaryWriter(config.logs_dir)
+
     def load_parameters(self):
         self.state_rep_net.load_state_dict(torch.load(self.config.state_rep_model_trained))
         self.actor_net.load_state_dict(torch.load(self.config.actor_model_trained))
         self.critic_net.load_state_dict(torch.load(self.config.critic_model_trained))
         self.target_actor_net.load_state_dict(self.actor_net.state_dict())
         self.target_critic_net.load_state_dict(self.critic_net.state_dict())
+
+    def discretize_reward_(self, x):
+        x = x.item()
+        if x<=1:
+            return torch.tensor(1.0, dtype=torch.float64)
+        elif x<=2:
+            return torch.tensor(2.0, dtype=torch.float64)
+        else:
+            return torch.tensor(3.0, dtype=torch.float64)
 
     def learn(self):
         # Transfer training data to device
@@ -221,13 +236,16 @@ class DRRTrainer(object):
                 if rec_item_idx in user_reviews[:, self.i]:
                     # Reward from rating in dataset if item rated by user
                     reward = user_reviews[user_reviews[:, self.i] == rec_item_idx, self.r][0]
+                    reward = reward.to(torch.float64)
                 else:
-                    # Item not rated by user, reward from PMF
+                    # Item not rated by user, retrward from PMF
                     with torch.no_grad():
                         if self.config.zero_reward:
                             reward = torch.tensor(0).to(self.device)
                         else:
                             reward = self.reward_function(torch.tensor(e).to(self.device), rec_item_idx)
+                    
+                reward = self.discretize_reward_(reward)
 
                 # Track episode rewards
                 rewards.append(reward.item())
@@ -253,6 +271,9 @@ class DRRTrainer(object):
                                    next_state,
                                    reward
                                    )
+                
+                # print(f"User id {e}, Episode {epoch}, step {t}, timestamp {timesteps} rec item {rec_item_idx}, reward {reward.item()}", end='\r')
+                
 
                 # TRAIN
                 if (timesteps > self.config.learning_start) and \
@@ -264,10 +285,14 @@ class DRRTrainer(object):
                                                                                      replay_buffer,
                                                                                      True
                                                                                      )
-
+                    
                     # LOGGING
                     actor_losses.append(actor_loss)
                     critic_losses.append(critic_loss)
+
+                    self.writer.add_scalar("actor_loss/timestamps", actor_loss, timesteps - self.config.learning_start)
+                    self.writer.add_scalar("critic_loss/timestamps", critic_loss, timesteps - self.config.learning_start)
+
 
                     if timesteps % self.config.log_freq == 0:
                         if len(rewards) > 0:
@@ -296,6 +321,14 @@ class DRRTrainer(object):
                 e_arr.append(epoch)
                 epi_rewards.append(np.sum(rewards))
                 epi_avg_rewards.append(np.mean(rewards))
+                # print(f"epoch {epoch}, rewards {np.sum(rewards)}, mean reward {np.mean(rewards)}, length {len(rewards)}")
+                # precision = [round((rewards.count(i)*100)/len(rewards), 2) for i in [1.0, 2.0, 3.0]]
+
+                self.writer.add_scalar("average_reward/episode", np.mean(rewards), epoch)
+                self.writer.add_scalar("total_reward/episode", np.sum(rewards), epoch)
+                # self.writer.add_scalar("purchase_precision", precision[2], epoch)
+                # self.writer.add_scalar("cart_precision", precision[1], epoch)
+                # self.writer.add_scalar("view_precision", precision[0], epoch)
 
             if t % self.config.saving_freq == 0:
                 export_plot(actor_losses, 'Actor Loss (Training)', self.config.train_actor_loss_plot_dir)
@@ -861,6 +894,7 @@ class DRRTrainer(object):
                 # Get item reward
                 reward = user_reviews[rec_item_idx, self.r]
 
+                print(f"user {e} rec item {rec_item_idx} reward {reward.item()}")
                 # Track episode rewards
                 rewards.append(reward.item())
 
