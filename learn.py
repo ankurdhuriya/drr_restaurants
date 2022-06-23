@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import sys
 from requests import request
@@ -829,7 +830,7 @@ class DRRTrainer(object):
         candidate_item_idxs = np.arange(self.item_embeddings.shape[0])
         candidate_item_idxs = torch.from_numpy(candidate_item_idxs).to(self.device).long()
 
-        # Start episodes
+        # Start episodesa
         for idx, e in enumerate(user_idxs):
             # ---------------------------- start of episode ---------------------------- #
 
@@ -875,26 +876,45 @@ class DRRTrainer(object):
 
                 # observe current state
                 # choose action according to actor network or exploration
-                # with torch.no_grad():
-                #     state = self.state_rep_net(user_emb, torch.stack(history_buffer.to_list()))
-                #     if np.random.uniform(0, 1) < self.config.eps_eval:
-                #         action = torch.from_numpy(0.1 * np.random.rand(self.action_shape)).float().to(self.device)
-                #     else:
-                #         action = self.actor_net(state.detach())
+                with torch.no_grad():
+                    state = self.state_rep_net(user_emb, torch.stack(history_buffer.to_list()))
+                    if np.random.uniform(0, 1) < self.config.eps_eval:
+                        action = torch.from_numpy(0.1 * np.random.rand(self.action_shape)).float().to(self.device)
+                    else:
+                        action = self.actor_net(state.detach())
+
+                ranking_scores = candidate_items @ action
+                rec_items = torch.stack(ignored_items) if len(ignored_items) > 0 else []
+                ranking_scores[rec_items] = -float("inf")
 
                 # Calculate ranking scores across items, discard ignored items
-                ranking_scores = self.reward_function(user_emb_exp, candidate_item_idxs)
-                rec_items = torch.stack(ignored_items) if len(ignored_items) > 0 else []
-                ranking_scores[rec_items[:, self.i] if len(ignored_items) > 0 else []] = -float("inf")
+                # ranking_scores = self.reward_function(user_emb_exp, candidate_item_idxs)
+                # rec_items = torch.stack(ignored_items) if len(ignored_items) > 0 else []
+                # ranking_scores[rec_items[:, self.i] if len(ignored_items) > 0 else []] = -float("inf")
 
                 # Get recommended item
-                rec_item_idx = torch.argmax(ranking_scores[user_reviews[:, self.i]])
-                rec_item_emb = user_candidate_items[rec_item_idx]
+                rec_item_idx = torch.argmax(ranking_scores)
+                rec_item_emb = candidate_items[rec_item_idx]
 
                 # Get item reward
-                reward = user_reviews[rec_item_idx, self.r]
+                # reward = user_reviews[rec_item_idx, self.r]
+                # Get item reward
+                # if rec_item_idx in user_reviews[:, self.i]:
+                #     # Reward from rating in dataset if item rated by user
+                #     reward = user_reviews[user_reviews[:, self.i] == rec_item_idx, self.r][0]
+                #     reward = reward.to(torch.float64)
+                # else:
+                    # Item not rated by user, retrward from PMF
+                with torch.no_grad():
+                    if self.config.zero_reward:
+                        reward = torch.tensor(0).to(self.device)
+                    else:
+                        reward = self.reward_function(torch.tensor(e).to(self.device), rec_item_idx)
+                    
+                reward = self.discretize_reward_(reward)
 
-                print(f"user {e} rec item {rec_item_idx} reward {reward.item()}")
+
+                print(f"user {e} rec item {rec_item_idx} reward {reward.item()}", end='\r')
                 # Track episode rewards
                 rewards.append(reward.item())
 
@@ -911,7 +931,8 @@ class DRRTrainer(object):
                     # next_state = state.detach()
 
                 # Remove new item from future recommendations
-                ignored_items.append(user_reviews[rec_item_idx])
+                # ignored_items.append(user_reviews[rec_item_idx])
+                ignored_items.append(torch.tensor(rec_item_idx).to(self.device))
 
                 # Housekeeping
                 t += 1
@@ -925,8 +946,8 @@ class DRRTrainer(object):
             # rel_real = user_reviews[T_indicies]
             # rel_real = rel_real[rel_real[:, self.r] > 0]
             rec_items = torch.stack(ignored_items)
-            rel_pred = rec_items[rec_items[:, self.r] > 0]
-            precision_T = len(rel_pred) / len(rec_items)
+            precision_T = rewards.count(3.0) / len(rewards)
+
 
             # Logging
             epoch += 1
