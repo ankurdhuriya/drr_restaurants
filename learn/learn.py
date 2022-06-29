@@ -10,6 +10,7 @@ from utils.prioritized_replay_buffer import NaivePrioritizedReplayMemory, Transi
 from utils.history_buffer import HistoryBuffer
 from utils.general import export_plot
 
+
 from torch.utils.tensorboard import SummaryWriter
 
 class DRRTrainer(object):
@@ -163,9 +164,8 @@ class DRRTrainer(object):
         e_arr = []
 
         # Get users, shuffle, andgo through array
-        user_idxs = np.array(list(self.users.values()))
+        user_idxs = np.array(list(self.users.keys()))
         np.random.shuffle(user_idxs)
-
         # Start episodes
         for idx, e in enumerate(user_idxs):
             # ---------------------------- start of episode ---------------------------- #
@@ -273,7 +273,7 @@ class DRRTrainer(object):
                                    reward
                                    )
                 
-                # print(f"User id {e}, Episode {epoch}, step {t}, timestamp {timesteps} rec item {rec_item_idx}, reward {reward.item()}", end='\r')
+                print(f"User id {e}, Episode {epoch}, step {t}, timestamp {timesteps} rec item {rec_item_idx}, reward {reward.item()}", end='\r')
                 
 
                 # TRAIN
@@ -498,7 +498,7 @@ class DRRTrainer(object):
         rewards = []
 
         # Get users, shuffle, and go through array
-        user_idxs = np.array(list(self.users.values()))
+        user_idxs = np.array(list(self.users.keys()))
         np.random.shuffle(user_idxs)
 
         # Start episodes
@@ -678,7 +678,7 @@ class DRRTrainer(object):
         e_arr = []
 
         # Get users, shuffle, andgo through array
-        user_idxs = np.array(list(self.users.values()))
+        user_idxs = np.array(list(self.users.keys()))
         np.random.shuffle(user_idxs)
 
         # Start episodes
@@ -824,7 +824,7 @@ class DRRTrainer(object):
         e_arr = []
 
         # Get users, shuffle, andgo through array
-        user_idxs = np.array(list(self.users.values()))
+        user_idxs = np.array(list(self.users.keys()))
         np.random.shuffle(user_idxs)
 
         candidate_item_idxs = np.arange(self.item_embeddings.shape[0])
